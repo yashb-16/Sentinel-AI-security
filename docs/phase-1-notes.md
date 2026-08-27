@@ -62,6 +62,48 @@ against the native Ollama instance instead (pulled `llama3.2:1b`
 directly via `ollama pull`). On a clean machine, `docker-compose.yml`'s
 Ollama/Redis services would bind those ports without conflict.
 
+## Issue: orphan `main` branch had no shared history with the feature branch, blocking the PR
+
+The repo started with zero commits, and `phase-1-auth-rag` was pushed
+before `main` existed anywhere (locally or on GitHub) — so GitHub quietly
+made `phase-1-auth-rag` the default branch. To get a proper `main` in
+place, it was created via `git checkout --orphan main` + an empty
+"Initial commit". That fixed the missing-branch symptom, but orphan
+branches are *deliberately* disconnected from all other history — so
+`main` and `phase-1-auth-rag` ended up as two unrelated root commits in
+the same repo.
+
+That broke pull request creation outright:
+`gh pr create` failed with `GraphQL: The phase-1-auth-rag branch has no
+history in common with main` — GitHub requires two branches to share a
+common ancestor before it can diff/merge them; it's not just a UI quirk,
+the API rejects it too.
+
+Fix: `git rebase --onto main --root phase-1-auth-rag` — replays
+`phase-1-auth-rag`'s commit on top of `main`'s initial commit instead of
+leaving it as a separate root, giving them real shared ancestry. Content
+was verified byte-identical before and after (`git diff <old-sha>
+phase-1-auth-rag` was empty). Required `git push --force-with-lease` to
+publish, since rebasing changes the commit's hash even though nothing
+inside it changed. Also set `main` back as the repo's default branch on
+GitHub (`gh repo edit --default-branch main`), since the earlier
+first-push-wins default had picked `phase-1-auth-rag` instead.
+
+Also fixed along the way: initially tried to restore untracked files by
+switching back to `phase-1-auth-rag` right after creating `main`, and
+Git refused ("untracked working tree files would be overwritten") since
+`main`'s empty index had left Phase 1's files on disk but untracked.
+Verified they were still byte-identical to what was already safely
+committed on `phase-1-auth-rag` before force-checking out — nothing was
+at risk, but worth remembering that switching away from a branch whose
+index you just emptied needs that same care.
+
+**Lesson for next time:** when bootstrapping a brand-new repo, create and
+push `main` (even just an empty "Initial commit") *first*, before any
+feature branch — not after. Creating a feature branch first and
+retrofitting `main` afterward is exactly what produced the disconnected
+history here.
+
 ## Known limitation carried forward
 
 The automated test suite fakes both the vector store and the LLM
