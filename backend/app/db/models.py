@@ -1,7 +1,8 @@
 import enum
 import uuid
+from datetime import datetime, timezone
 
-from sqlalchemy import JSON, ForeignKey, String
+from sqlalchemy import JSON, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator, CHAR
 
@@ -87,3 +88,44 @@ class Document(Base):
     qdrant_point_id: Mapped[uuid.UUID] = mapped_column(UUIDType, unique=True, nullable=False)
 
     tenant: Mapped["Tenant"] = relationship(back_populates="documents")
+
+
+class Ticket(Base):
+    __tablename__ = "tickets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUIDType, ForeignKey("tenants.id"), nullable=False)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("users.id"), nullable=False
+    )
+    subject: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(String, nullable=False)
+    category: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class ApprovalRequest(Base):
+    """A tool request the Gateway scored as HIGH/CRITICAL risk. Parked
+    here instead of executing -- only a human decision (via the
+    /approvals endpoints) can let the underlying tool actually run."""
+
+    __tablename__ = "approval_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUIDType, ForeignKey("tenants.id"), nullable=False)
+    requested_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("users.id"), nullable=False
+    )
+    tool_name: Mapped[str] = mapped_column(String, nullable=False)
+    tool_args: Mapped[dict] = mapped_column(JSON, nullable=False)
+    risk_level: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType, ForeignKey("users.id"), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
