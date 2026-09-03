@@ -1,73 +1,60 @@
 # Sentinel — Progress Log
 
 ## Current Phase
-Phase 3 — Tool Gateway + Policy/Risk Engine
+Phase 4 — DLP + Output Validation
 
 ## Status
-Implementation complete, all 65 tests GREEN (including every Phase 1 and
-Phase 2 test unchanged), manual end-to-end verification done against the
-real stack. Awaiting your manual review and sign-off before committing.
+Implementation complete, all 81 tests GREEN (including every Phase 1-3
+test unchanged), manual end-to-end verification done. Awaiting your
+manual review and sign-off before committing.
 
-## Completed — Phase 1 (merged to main via PR #1)
-- JWT auth, tenant-isolated RAG, mandatory Postgres re-verification of
-  every retrieved document (never trusting Qdrant alone). 16 tests.
-  See `docs/phase-1-notes.md`.
+## Completed — Phases 1-3 (all merged to main)
+- **Phase 1** (PR #1): JWT auth, tenant-isolated RAG, mandatory Postgres
+  re-verification of every retrieved document. See `docs/phase-1-notes.md`.
+- **Phase 2** (PR #2): LangGraph agent, indirect prompt-injection defense
+  (retrieved documents wrapped as untrusted, system rules against
+  following embedded instructions), 6 attack techniques tested
+  before/after. See `docs/phase-2-notes.md`.
+- **Phase 3** (PR #3): Tool Gateway + Policy/Risk Engine. Two tools
+  (search_employee, create_ticket), deterministic ALLOW/DENY/
+  REQUIRE_APPROVAL pipeline, human-approval loop. Spiked and rejected
+  Needle (x86_64 build incompatibility). See `docs/phase-3-notes.md`.
 
-## Completed — Phase 2 (merged to main via PR #2)
-- LangGraph agent wrapping the retrieve→generate flow; every retrieved
-  document wrapped as `<retrieved_document trust="untrusted">` with a
-  system rule against following embedded instructions. 6 attack
-  techniques tested before/after mitigation, verified live against a
-  real poisoned document. See `docs/phase-2-notes.md`.
-
-## Completed — Phase 3
-- [x] Phase 3 objective and plan produced and approved
+## Completed — Phase 4
+- [x] Phase 4 objective and plan produced and approved
 - [x] Checked out `main`, pulled latest, branched
-      `phase-3-tool-gateway-policy-engine`
-- [x] Spiked on Needle (Cactus Compute) as a dedicated tool-calling model
-      to replace the structured-text-prompting workaround — found a real
-      blocking incompatibility (their native build hard-codes ARM64
-      compiler flags, fails on x86_64 Linux desktops) after getting an
-      isolated Python 3.12 via `uv python install` (no system changes).
-      Rejected for now; documented in `docs/phase-3-notes.md` so this
-      isn't re-investigated from scratch later.
-- [x] Wrote 29 new tests first (TDD), confirmed RED
-      (`ModuleNotFoundError`), then implemented to GREEN: policy engine,
-      risk engine, gateway, both tools, approvals endpoints, agent
-      tool-calling, and a defense-in-depth test tying Phase 2 and 3
-      together
+      `phase-4-dlp-output-validation`
+- [x] Wrote 20 new tests first (TDD), confirmed RED
+      (`ModuleNotFoundError: app.dlp.scanner`), then implemented to GREEN
 - [x] Implemented:
-  - `app/policy/{policy_engine,risk_engine,gateway}.py` — deterministic
-    WHO/WHAT/WHICH policy rules, LOW/MEDIUM/HIGH/CRITICAL risk scoring,
-    and the combined ALLOW/DENY/REQUIRE_APPROVAL gate
-  - `app/tools/{search_employee,create_ticket,registry}.py` — tenant and
-    identity are always server-injected from the authenticated session,
-    never parsed from LLM-supplied arguments (removes an entire attack
-    class by construction, not just by runtime check)
-  - `app/db/models.py` — added `Ticket` and `ApprovalRequest`
-  - `app/agent/graph.py` — extended with tool-request parsing
-    (`TOOL_CALL: name(args)` strict format) and a
-    `handle_tool_request_node` that routes every parsed request through
-    the Gateway before anything executes
-  - `app/api/routes_approvals.py` — `GET /approvals`,
-    `POST /approvals/{id}/decide` (admin-only; approving actually runs
-    the underlying tool)
-- [x] All 65 tests GREEN
+  - `app/dlp/scanner.py` -- `scan_output()`: credentials always BLOCK,
+    PII (email/phone) REDACT in place, salary figures REDACT for
+    employees but ALLOW for HR/admin (role-aware, ties back to Phase 1).
+    Findings are category labels only ("credential", "email", ...) --
+    never the raw matched value
+  - `app/agent/graph.py` -- new `dlp_check` node, added as the graph's
+    final step before END. `AgentState` gained `answer_is_structured:
+    bool`, set `True` by `handle_tool_request_node` for every message it
+    writes itself (tool result, DENY, REQUIRE_APPROVAL). `dlp_check`
+    only scans when that flag is absent -- exempting Phase 3's own
+    controlled outputs from being redacted/broken by DLP
+  - Logging: DLP events log `action` + `findings` (category labels) +
+    `user_role` only -- verified via a log-capture test that the raw
+    sensitive value never appears in logs
+- [x] All 81 tests GREEN
 - [x] Manual end-to-end verification against real Postgres + Qdrant +
-      Ollama (`llama3.2:1b`):
-  - Employee self-lookup via `search_employee` — worked correctly, live
-  - Employee attempting to look up someone else — correctly denied live
-    by the real policy engine ("Sorry, that action is not allowed for
-    your account")
-  - Employee filing a salary-related ticket via natural language — the
-    real model did **not** reliably format the multi-argument
-    `create_ticket` tool call (see "Known Issues" below and
-    `docs/phase-3-notes.md`) — confirmed **zero** side effects resulted
-    (no Ticket, no ApprovalRequest), so the failure mode is a usability
-    gap, not a security gap
-  - Seeded a pending `ApprovalRequest` directly and verified the full
-    human-approval loop for real: employee → 403 on `/approvals`, admin
-    → sees it, admin approves → the real `Ticket` row gets created
+      Ollama:
+  - Confirmed `search_employee`'s legitimate email result survives
+    DLP untouched (the Phase 3/4 exemption working live)
+  - **Real finding:** adding tool definitions to every prompt (Phase 3)
+    destabilized the small free model's plain RAG answers -- it started
+    hallucinating tool calls for unrelated questions. Attempted a
+    prompt-wording fix; it made things *worse* (broke the previously-
+    reliable search_employee case too). Reverted to the original
+    prompt. Documented as a known Phase 3 model-reliability limitation,
+    resurfaced by Phase 4's testing -- not a Phase 4 defect, since DLP's
+    own logic is pure deterministic regex, fully proven independent of
+    the LLM via scripted fake-LLM tests. See `docs/phase-4-notes.md`.
 
 ## In Progress
 - [ ] Your manual review — nothing committed until you sign off
@@ -75,8 +62,8 @@ real stack. Awaiting your manual review and sign-off before committing.
 ## Next Steps
 - [ ] User manual review and sign-off
 - [ ] Write PR title/description, commit to
-      `phase-3-tool-gateway-policy-engine`, open PR into `main`
-- [ ] After merge: begin Phase 4 (DLP + Output Validation)
+      `phase-4-dlp-output-validation`, open PR into `main`
+- [ ] After merge: begin Phase 5 (Observability)
 
 ## Key Decisions Made
 - Package manager: **uv**; Embeddings: local `sentence-transformers`;
@@ -90,35 +77,39 @@ real stack. Awaiting your manual review and sign-off before committing.
 - Agent framework: **LangGraph**
 - Prompt-injection defense (Phase 2): retrieved documents wrapped as
   `<retrieved_document trust="untrusted">` + explicit system rules
-- Tool-calling format (Phase 3): a strict `TOOL_CALL: name(args)`
-  text format the LLM is instructed to use, parsed defensively — an
-  unrecognized/malformed reply always falls through to a safe plain
-  answer, never a guessed action. Chosen over native function-calling
-  APIs and over Needle (evaluated and rejected — see `docs/phase-3-notes.md`)
-  because it needs zero extra dependencies and works with the existing,
-  proven Ollama setup
-- Tool security model (Phase 3): `user`/`db` context for every tool is
-  always server-injected from the authenticated session, never parsed
-  from LLM-supplied tool-call arguments — removes cross-tenant/identity
-  forgery as an attack surface by construction rather than by runtime
-  check alone
-- Human-approval model (Phase 3): HIGH/CRITICAL-risk requests are
-  persisted as real `PENDING` `ApprovalRequest` rows; only an admin
-  deciding via `POST /approvals/{id}/decide` can let the underlying tool
-  actually execute
+- Tool-calling format (Phase 3): a strict `TOOL_CALL: name(args)` text
+  format, parsed defensively — malformed replies fall through to a safe
+  plain answer, never a guessed action
+- Tool security model (Phase 3): `user`/`db` context always
+  server-injected from the authenticated session, never LLM-controlled
+- Human-approval model (Phase 3): HIGH/CRITICAL-risk requests persisted
+  as real `PENDING` rows; only admin decide via
+  `POST /approvals/{id}/decide` executes them
+- DLP scope (Phase 4): scans only the LLM's own freely-generated prose,
+  never a tool's already-authorized result — implemented via an
+  `answer_is_structured` flag set inside the graph, distinct from why
+  `/approvals/decide` also skips DLP (that endpoint never touches the
+  graph at all, so no flag is even involved there)
+- DLP categories (Phase 4, focused set): credentials (BLOCK),
+  PII/email/phone (REDACT), salary figures (role-aware REDACT/ALLOW) —
+  generic "confidential" keyword matching deliberately excluded as too
+  noisy for this phase
 
 ## Known Issues / Technical Debt
 - The automated test suite fakes the vector store and LLM provider —
   real `QdrantVectorStore`/`OllamaProvider` bugs are only caught by
   manual end-to-end verification (see `docs/phase-1-notes.md`)
-- **New in Phase 3:** the real `llama3.2:1b` model does not reliably
-  format multi-argument tool calls (`create_ticket`); single-argument
-  calls (`search_employee`) worked reliably in live testing. This is a
-  documented model-capability gap, not a security gap — malformed
-  replies always fail safe (no tool executes) rather than executing
-  something unintended. Revisit with a larger model or a
-  purpose-built tool-calling model (Needle was evaluated and rejected
-  for now due to an x86_64 build incompatibility) in a later phase.
+- `llama3.2:1b`'s tool-call triggering is unreliable and appears to
+  worsen unpredictably with prompt-wording changes rather than improve
+  (see `docs/phase-3-notes.md` and `docs/phase-4-notes.md`) — a
+  known, documented model-capability gap. All failure modes observed so
+  far fail safe (a confusing non-answer or a policy-correct denial),
+  never an unintended action. **Deliberately deferred** (not
+  forgotten) until a good working alternative is available — see the
+  ranked options list in `docs/phase-3-notes.md`'s "Deferred" section
+  (a free deterministic pre-router that only shows the AI the tool menu
+  for tool-shaped questions is the top candidate; a bigger/paid model
+  is a one-line config swap away once there's budget)
 - Phase 2's injection defense is only proven against 6 attack
   techniques and one small model manually — Phase 6 is reserved for
   broader adversarial red-teaming
