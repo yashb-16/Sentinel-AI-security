@@ -1,3 +1,4 @@
+import logging
 import re
 import uuid
 
@@ -6,10 +7,13 @@ from langgraph.graph import END, StateGraph
 from app.agent.prompt_security import SECURITY_RULES, wrap_untrusted_document
 from app.agent.state import AgentState
 from app.db.models import ApprovalRequest
+from app.dlp.scanner import DLPAction, scan_output
 from app.policy.gateway import GatewayDecision, decide
 from app.rag import llm as llm_module
 from app.rag.retriever import retrieve_documents
 from app.tools.registry import TOOL_DEFINITIONS_PROMPT, TOOLS
+
+logger = logging.getLogger("sentinel.dlp")
 
 _TOOL_CALL_PATTERN = re.compile(r'^\s*TOOL_CALL:\s*(\w+)\((.*)\)\s*$', re.DOTALL)
 _ARG_PATTERN = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
@@ -64,7 +68,10 @@ def handle_tool_request_node(state: AgentState) -> dict:
     gateway_decision, risk = decide(tool_name=tool_name, args=args, user=user)
 
     if gateway_decision == GatewayDecision.DENY:
-        return {"answer": "Sorry, that action is not allowed for your account."}
+        return {
+            "answer": "Sorry, that action is not allowed for your account.",
+            "answer_is_structured": True,
+        }
 
     if gateway_decision == GatewayDecision.REQUIRE_APPROVAL:
         approval = ApprovalRequest(
@@ -82,7 +89,8 @@ def handle_tool_request_node(state: AgentState) -> dict:
             "answer": (
                 "This request has been flagged as sensitive and now requires "
                 "approval from an admin before it can proceed."
-            )
+            ),
+            "answer_is_structured": True,
         }
 
     # ALLOW -- actually run the tool now.
@@ -90,9 +98,35 @@ def handle_tool_request_node(state: AgentState) -> dict:
     result = tool_fn(**args, user=user, db=db)
 
     if result is None:
-        return {"answer": "I couldn't find anything matching that request."}
+        return {"answer": "I couldn't find anything matching that request.", "answer_is_structured": True}
 
-    return {"answer": f"Done. Result: {result}"}
+    return {"answer": f"Done. Result: {result}", "answer_is_structured": True}
+
+
+def dlp_check_node(state: AgentState) -> dict:
+    """The last line of defense before the answer reaches the user. Only
+    ever scans the AI's own raw generated prose -- a structured message
+    our own code already produced (a tool result, a denial, a pending-
+    approval notice) is exempt, since scanning it would break the very
+    tools Phase 3 built without adding any real safety.
+    """
+    if state.get("answer_is_structured", False):
+        return {}
+
+    result = scan_output(state["answer"], user=state["user"])
+
+    if result.findings:
+        logger.info(
+            "DLP action=%s findings=%s user_role=%s",
+            result.action.value,
+            result.findings,
+            str(state["user"].role),
+        )
+
+    if result.action == DLPAction.ALLOW:
+        return {}
+
+    return {"answer": result.text}
 
 
 def build_agent_graph():
@@ -100,8 +134,10 @@ def build_agent_graph():
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("generate", generate_node)
     graph.add_node("handle_tool_request", handle_tool_request_node)
+    graph.add_node("dlp_check", dlp_check_node)
     graph.set_entry_point("retrieve")
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", "handle_tool_request")
-    graph.add_edge("handle_tool_request", END)
+    graph.add_edge("handle_tool_request", "dlp_check")
+    graph.add_edge("dlp_check", END)
     return graph.compile()

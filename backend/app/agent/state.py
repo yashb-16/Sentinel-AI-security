@@ -7,3 +7,4 @@ class AgentState(TypedDict):
     db: object
     documents: list
     answer: str
+    answer_is_structured: bool

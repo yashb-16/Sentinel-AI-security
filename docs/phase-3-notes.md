@@ -81,6 +81,39 @@ free local model to reliably *trigger* it for multi-argument tools is a
 known, documented gap, not a hidden one. Worth revisiting with a larger
 or purpose-built tool-calling model in a later phase (see PROGRESS.md).
 
+## Deferred (deliberately, not forgotten): fix the tool-triggering instability
+
+Phase 4's live testing surfaced more evidence of this same issue (see
+`docs/phase-4-notes.md`): once `TOOL_DEFINITIONS_PROMPT` is part of every
+prompt, `llama3.2:1b` sometimes hallucinates a tool call for completely
+unrelated questions (e.g. asking about the vacation policy). A prompt-
+wording fix was attempted and made things *worse* (broke the
+previously-reliable `search_employee` case too), so it was reverted.
+
+**Decision: consciously deferred, not abandoned.** Revisit once a good
+working alternative exists -- options discussed and worth trying then,
+in rough order of preference:
+
+1. **A cheap, deterministic pre-router** (no AI needed): only include
+   `TOOL_DEFINITIONS_PROMPT` in the prompt at all when the question
+   itself looks tool-shaped (keyword check: "look up", "search for",
+   "create a ticket", "file a ticket", etc.). Removes the tool menu
+   entirely from prompts that don't need it, which is what actually
+   confuses the small model. Free, fast to build, matches the project's
+   own "don't trust the LLM's judgment where a deterministic check will
+   do" philosophy.
+2. **A bigger/paid LLM** once API credits are available --
+   `LLM_PROVIDER=openai` is already a one-line config swap.
+3. **A bigger free local model** (e.g. `llama3.1:8b` instead of
+   `llama3.2:1b`) via Ollama -- more reliable instruction-following,
+   costs more RAM/CPU and latency.
+4. Needle or a similar purpose-built tool-calling model, if it matures
+   and adds proper x86_64 desktop support later (see the spike notes
+   above -- rejected for now due to a real ARM/x86 build
+   incompatibility, not a made-up reason).
+
+Do not re-investigate from scratch -- start from this list.
+
 ## Design note: tenant/identity are never LLM-controlled parameters
 
 `search_employee` and `create_ticket` both take `user` and `db` as
