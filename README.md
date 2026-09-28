@@ -29,8 +29,13 @@ Endpoints: `POST /auth/login`, `POST /ask`, `GET /approvals`, `POST /approvals/{
 
 ## Test
 ```bash
-uv run pytest   # 81 tests, no network/GPU needed (LLM and vector store are faked)
+uv run pytest   # 111 tests, no network/GPU needed (LLM and vector store are faked)
 ```
+
+## Measured results
+On independent data (Faker, real prose, public injection dataset) the DLP layer went from **39% to 94% recall** after
+a measure-and-fix cycle, at a cost of 0.1% false positives; the injection defense could not be shown to help on
+small real models (they already resisted). Full methodology and limitations: [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Docs
 Design notes and real findings per phase are in [`docs/`](docs/); status in [`PROGRESS.md`](PROGRESS.md);
